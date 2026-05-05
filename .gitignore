@@ -1,0 +1,46 @@
+# Binaries
+*.exe
+gkport.exe
+gkport
+
+# Test binary, built with `go test -c`
+*.test
+
+# Runs a out-of-tree generated host binary
+testdata_*
+
+# What you develop or use Go for
+/bin/
+
+# Go workspace file
+go.work
+go.work.bin
+
+# Go dependencies
+/go.sum
+/go.mod
+
+# Output of the go coverage tool
+cover.out
+cover.profile
+
+# Dependency directories (remove the comment below to include it)
+/vendor/
+
+# Go module cache
+/go-build/
+**/go-build/
+
+# Temporary files
+*.tmp
+*.temp
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
