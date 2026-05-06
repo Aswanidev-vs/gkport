@@ -1,6 +1,6 @@
 # GKPort [![Go](https://img.shields.io/badge/Go-1.24.2-brightgreen.svg)](https://golang.org/) [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-![GKPort Demo](screenshots/demo.gif)
+
 
 GKPort is a fast, terminal-based CLI and TUI tool for **Windows developers** to discover and kill common development server ports (like 3000, 8080) or any listening TCP port. Built with [Bubble Tea](https://github.com/charmbracelet/bubbletea) for smooth interactive UI.
 
@@ -10,7 +10,7 @@ GKPort is a fast, terminal-based CLI and TUI tool for **Windows developers** to 
 - ⌨️ **Custom ports**: Enter any port (e.g., 5173, 4200) - works for ALL listening TCP ports
 - ⚡ **CLI shortcuts**: `--kill 3000`, `--kill-all`, `--interactive`
 - 🪟 **Windows-native**: Uses `taskkill /F` fallback for stubborn processes
-- 📊 Shows **PID, command line, user** for each port
+- 📊 Shows **PID** for each port, with **togglable path/command line** view (`p` key)
 
 ## 🚀 Installation
 
@@ -53,11 +53,11 @@ Run `gkport.exe` or `gkport.exe --interactive`
 GKPort
 Common developer ports currently listening
 
-> :3000  PID 1234  node /app/server.js
-  :8080  PID 5678  go run main.go
-  :5000  PID 9999  python app.py
+> :3000  PID 1234
+  :8080  PID 5678
+  :5000  PID 9999
 
-Up/Down: move  Enter: kill selected  a: add custom port  q: quit
+Up/Down: move  Enter: kill selected  p: toggle path  a: add custom port  q: quit
 ```
 
 **Controls**:
@@ -65,6 +65,7 @@ Up/Down: move  Enter: kill selected  a: add custom port  q: quit
 |-----|--------|
 | ↑/↓ or j/k | Navigate ports |
 | Enter | Select to kill |
+| `p` | Toggle path/command line display |
 | `a` | Enter custom port |
 | `y` | Confirm kill |
 | `n`/Esc | Cancel |

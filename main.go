@@ -54,6 +54,7 @@ type model struct {
 	selected  *PortInfo
 	status    string
 	quitting  bool
+	showPath  bool
 }
 
 func scanListeningPorts() ([]PortInfo, error) {
@@ -242,6 +243,14 @@ func (m model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor < len(m.ports)-1 {
 			m.cursor++
 		}
+	case "p":
+		m.showPath = !m.showPath
+		if m.showPath {
+			m.status = "Path display enabled."
+		} else {
+			m.status = "Path display disabled."
+		}
+		return m, nil
 	case "a":
 		m.mode = modeCustomInput
 		m.textInput.SetValue("")
@@ -342,15 +351,17 @@ func (m model) View() string {
 				cursor = cursorStyle.Render(">")
 			}
 
-			cmdline := p.Cmdline
-			if strings.TrimSpace(cmdline) == "" {
-				cmdline = "(command unavailable)"
+			line := fmt.Sprintf("%s %s  PID %-6d", cursor, portStyle.Render(fmt.Sprintf(":%d", p.Port)), p.PID)
+			if m.showPath {
+				cmdline := p.Cmdline
+				if strings.TrimSpace(cmdline) == "" {
+					cmdline = "(command unavailable)"
+				}
+				if len(cmdline) > 70 {
+					cmdline = cmdline[:67] + "..."
+				}
+				line += "  " + cmdline
 			}
-			if len(cmdline) > 70 {
-				cmdline = cmdline[:67] + "..."
-			}
-
-			line := fmt.Sprintf("%s %s  PID %-6d  %s", cursor, portStyle.Render(fmt.Sprintf(":%d", p.Port)), p.PID, cmdline)
 			b.WriteString(line + "\n")
 		}
 	}
@@ -366,7 +377,7 @@ func (m model) View() string {
 			b.WriteString(fmt.Sprintf("Kill port %d (PID %d)? Press y to confirm, n to cancel.\n", m.selected.Port, m.selected.PID))
 		}
 	default:
-		b.WriteString(helpStyle.Render("Up/Down: move  Enter: kill selected  a: add custom port  q: quit\n"))
+		b.WriteString(helpStyle.Render("Up/Down: move  Enter: kill selected  p: toggle path  a: add custom port  q: quit\n"))
 	}
 
 	if m.status != "" {
