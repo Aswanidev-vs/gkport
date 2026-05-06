@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/bubbles/textinput"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/fatih/color"
 	"github.com/shirou/gopsutil/v3/net"
@@ -24,13 +24,13 @@ type PortInfo struct {
 	User    string
 }
 
-var commonDevPorts = []int{3000, 3001, 3002, 4000, 5000, 5001, 8000, 8001, 8080, 8081, 9000, 9090}
+var commonDevPorts = []int{3000, 3001, 3002, 4000, 5000, 5001, 8000, 5173, 8001, 8080, 8081, 9000, 9090}
 
 var (
-	titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
-	helpStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
+	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
+	helpStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 	cursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
-	portStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("228"))
+	portStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("228"))
 )
 
 type appMode int
@@ -47,13 +47,13 @@ type killResultMsg struct {
 }
 
 type model struct {
-	ports       []PortInfo
-	cursor      int
-	mode        appMode
-	textInput   textinput.Model
-	selected    *PortInfo
-	status      string
-	quitting    bool
+	ports     []PortInfo
+	cursor    int
+	mode      appMode
+	textInput textinput.Model
+	selected  *PortInfo
+	status    string
+	quitting  bool
 }
 
 func scanListeningPorts() ([]PortInfo, error) {
