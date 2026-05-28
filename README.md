@@ -6,7 +6,7 @@ GKPort is a fast, terminal-based CLI and TUI tool for **Windows developers** to 
 
 ## ✨ Features
 - 🔍 **Auto-scan** common dev ports (3000, 8080, etc.) that are actively **LISTENING**
-- 🎮 **Interactive TUI**: Navigate, select, kill with vim-like keys (j/k, Enter)
+- 🎮 **Interactive TUI**: Navigate, select (j/k, Enter)
 - ⌨️ **Custom ports**: Enter any port (e.g., 5173, 4200) - works for ALL listening TCP ports
 - ⚡ **CLI shortcuts**: `--kill 3000`, `--kill-all`, `--interactive`
 - 🪟 **Windows-native**: Uses `taskkill /F` fallback for stubborn processes

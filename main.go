@@ -396,14 +396,26 @@ func runInteractive(ports []PortInfo) error {
 func main() {
 	killAll := flag.Bool("kill-all", false, "Kill all detected common developer ports")
 	killPortStr := flag.String("kill", "", "Kill a specific listening port (e.g. --kill=3000)")
+	yes := flag.Bool("yes", false, "Bypass confirmation prompts for non-interactive CLI kills")
 	interactive := flag.Bool("interactive", false, "Open the interactive Bubble Tea UI")
 	help := flag.Bool("help", false, "Show help")
+	// Short form: -y
+	flag.BoolVar(yes, "y", false, "Bypass confirmation prompts for non-interactive CLI kills")
 	flag.Parse()
 
 	if *help {
 		fmt.Println("gkport - Developer port lister & killer")
-		fmt.Println("  gkport [--interactive] [--kill-all] [--kill=PORT] [--help]")
+		fmt.Println("")
+		fmt.Println("Usage:")
+		fmt.Println("  gkport")
+		fmt.Println("    [--interactive]")
+		fmt.Println("    [--kill-all]")
+		fmt.Println("    [--kill=PORT]")
+		fmt.Println("    [-y|--yes]")
+		fmt.Println("    [--help]")
+		fmt.Println("")
 		fmt.Println("Default view lists common developer ports; --kill accepts any listening port.")
+		fmt.Println("Use -y/--yes to bypass confirmation prompts for non-interactive CLI kills.")
 		os.Exit(0)
 	}
 
@@ -424,15 +436,23 @@ func main() {
 			os.Exit(1)
 		}
 
-		color.Yellow("Kill port %d (PID %d, %s)? (y/N): ", info.Port, info.PID, info.Cmdline)
-		var confirm string
-		fmt.Scanln(&confirm)
-		if strings.ToLower(strings.TrimSpace(confirm)) == "y" {
+		if *yes {
 			if err := killPID(info.PID); err != nil {
 				color.Red("Failed: %v", err)
 				os.Exit(1)
 			}
 			color.Green("Killed port %d (PID %d)", info.Port, info.PID)
+		} else {
+			color.Yellow("Kill port %d (PID %d, %s)? (y/N): ", info.Port, info.PID, info.Cmdline)
+			var confirm string
+			fmt.Scanln(&confirm)
+			if strings.ToLower(strings.TrimSpace(confirm)) == "y" {
+				if err := killPID(info.PID); err != nil {
+					color.Red("Failed: %v", err)
+					os.Exit(1)
+				}
+				color.Green("Killed port %d (PID %d)", info.Port, info.PID)
+			}
 		}
 		return
 	}
@@ -450,15 +470,25 @@ func main() {
 		}
 
 		printPorts(ports)
-		color.Yellow("Kill ALL developer ports? (y/N): ")
-		var confirm string
-		fmt.Scanln(&confirm)
-		if strings.ToLower(strings.TrimSpace(confirm)) == "y" {
+		if *yes {
 			for _, p := range ports {
 				if err := killPID(p.PID); err != nil {
 					color.Red("Failed to kill PID %d (port %d): %v", p.PID, p.Port, err)
 				} else {
 					color.Green("Killed PID %d (port %d)", p.PID, p.Port)
+				}
+			}
+		} else {
+			color.Yellow("Kill ALL developer ports? (y/N): ")
+			var confirm string
+			fmt.Scanln(&confirm)
+			if strings.ToLower(strings.TrimSpace(confirm)) == "y" {
+				for _, p := range ports {
+					if err := killPID(p.PID); err != nil {
+						color.Red("Failed to kill PID %d (port %d): %v", p.PID, p.Port, err)
+					} else {
+						color.Green("Killed PID %d (port %d)", p.PID, p.Port)
+					}
 				}
 			}
 		}
