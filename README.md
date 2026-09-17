@@ -1,4 +1,4 @@
-# GKPort [![Go](https://img.shields.io/badge/Go-1.24.2-brightgreen.svg)](https://golang.org/) [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+# GKPort [![Go](https://img.shields.io/badge/Go-1.24.2-brightgreen.svg)](https://golang.org/) [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![CI](https://github.com/Aswanidev-vs/gkport/actions/workflows/ci.yml/badge.svg)](https://github.com/Aswanidev-vs/gkport/actions/workflows/ci.yml) [![Release](https://github.com/Aswanidev-vs/gkport/actions/workflows/release.yml/badge.svg)](https://github.com/Aswanidev-vs/gkport/releases/latest)
 
 
 
@@ -23,6 +23,20 @@ Available globally as `gkport` command.
 
 ### Prebuilt Binary
 Download `gkport.exe` from [Releases](https://github.com/Aswanidev-vs/gkport/releases)
+
+| Download | Platform |
+|----------|----------|
+| `gkport-windows-amd64.exe` | Windows 64-bit (most common) |
+| `gkport-windows-arm64.exe` | Windows on ARM |
+
+Each release also ships a `SHA256SUMS.txt`. To verify a download:
+
+```powershell
+Get-FileHash .\gkport-windows-amd64.exe -Algorithm SHA256
+```
+
+Use the [`latest` release](https://github.com/Aswanidev-vs/gkport/releases/tag/latest) for a
+permanent `gkport.exe` link, or a versioned tag for a pinned build.
 
 ### From Source
 ```bash
@@ -110,6 +124,35 @@ The list and rules live at the top of `main.go` (`protectedPorts`, `systemProces
 1. Fork & PR
 2. Add new common ports to `commonDevPorts`
 3. `go mod tidy && go build`
+
+Every push and PR runs the [CI workflow](.github/workflows/ci.yml): `gofmt`, `go vet`, `go test`,
+and a cross-compile for Windows `amd64` + `arm64`.
+
+## 📦 Releasing (maintainers)
+
+Releases are fully automated by [`.github/workflows/release.yml`](.github/workflows/release.yml).
+Pushing a semver tag is all that is needed:
+
+```bash
+git checkout main
+git pull
+git tag v0.3.0
+git push origin v0.3.0
+```
+
+The workflow then:
+
+1. Resolves and validates the tag (must start with `v`)
+2. Runs `go mod tidy` check, `go vet`, and `go test`
+3. Cross-compiles `gkport-windows-amd64.exe` and `gkport-windows-arm64.exe` with the tag
+   injected into `main.version` (visible via `gkport --help` and in the TUI header)
+4. Generates `SHA256SUMS.txt`
+5. Publishes the GitHub Release with auto-generated release notes
+6. Refreshes the rolling [`latest` release](https://github.com/Aswanidev-vs/gkport/releases/tag/latest)
+
+Tags containing a hyphen (e.g. `v0.3.0-rc1`) are automatically marked as pre-releases.
+Use the workflow's **Run workflow** button with a `tag` input to rebuild an existing tag,
+or with no input to build from the current branch.
 
 ## 📸 Screenshots
 *(Add demo GIF here)*
