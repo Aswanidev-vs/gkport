@@ -1,0 +1,138 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  # Manual re-release / backfill: pick an existing tag (e.g. v0.2.2).
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build and publish (leave empty to use the branch ref)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  GO_VERSION: 1.24.2
+
+jobs:
+  release:
+    name: Build & publish release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag }}" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          case "$tag" in
+            v*) ;;
+            *) echo "::error::Tag '$tag' must start with 'v' (e.g. v1.0.0)"; exit 1 ;;
+          esac
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Validate
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+          go vet ./...
+          go test ./...
+
+      - name: Build Windows binaries
+        env:
+          CGO_ENABLED: '0'
+          VERSION: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          ldflags="-s -w -X main.version=${VERSION}"
+          for arch in amd64 arm64; do
+            echo "::group::build windows/$arch"
+            GOOS=windows GOARCH="$arch" go build -trimpath -ldflags "$ldflags" \
+              -o "dist/gkport-windows-${arch}.exe" .
+            echo "::endgroup::"
+          done
+          ls -lh dist
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum ./*.exe > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: gkport ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
+          fail_on_unmatched_files: true
+          files: |
+            dist/gkport-windows-amd64.exe
+            dist/gkport-windows-arm64.exe
+            dist/SHA256SUMS.txt
+
+  latest:
+    name: Refresh rolling 'latest' download
+    needs: release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build amd64 binary
+        env:
+          CGO_ENABLED: '0'
+          VERSION: ${{ needs.release.outputs.tag }}
+        run: |
+          mkdir -p dist
+          GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+            -o dist/gkport.exe .
+          ls -lh dist
+
+      - name: Publish rolling 'latest' release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest stable build
+          body: |
+            Rolling build of the newest tagged release (`${{ needs.release.outputs.tag }}`).
+
+            For a pinned, immutable download use the versioned releases instead.
+          make_latest: false
+          fail_on_unmatched_files: true
+          files: dist/gkport.exe

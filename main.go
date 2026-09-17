@@ -27,6 +27,10 @@ type PortInfo struct {
 	ProtectReason string
 }
 
+// Overridden at build time by the release workflow:
+// go build -ldflags "-X main.version=v1.2.3".
+var version = "dev"
+
 var commonDevPorts = []int{3000, 3001, 3002, 4000, 5000, 5001, 8000, 5173, 8001, 8080, 8081, 9000, 9090}
 
 // Ports above 1024 that belong to the OS or a built-in Windows service.
@@ -511,6 +515,7 @@ func (m model) View() string {
 
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("GKPort"))
+	b.WriteString(helpStyle.Render(" " + version))
 	b.WriteString("\n")
 	b.WriteString(fmt.Sprintf("Listening TCP ports: %d", len(m.ports)))
 	if protected := countProtected(m.ports); protected > 0 {
@@ -608,6 +613,8 @@ func main() {
 		fmt.Println("(privileged ports, known Windows service ports, and processes owned by SYSTEM).")
 		fmt.Println("--kill-all only targets the common developer ports.")
 		fmt.Println("Use -y/--yes to bypass confirmation prompts for non-interactive CLI kills.")
+		fmt.Println("")
+		fmt.Printf("Version: %s\n", version)
 		os.Exit(0)
 	}
 
