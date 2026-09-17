@@ -42,10 +42,27 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
+      - name: Verify module files are present
+        run: |
+          missing=""
+          for f in go.mod go.sum; do
+            [ -f "$f" ] || missing="$missing $f"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required Go module file(s):$missing"
+            echo ""
+            echo "These files must be committed. Check that .gitignore does not"
+            echo "contain '/go.mod' or '/go.sum', then: git add -f go.mod go.sum"
+            exit 1
+          fi
+
       - name: Verify module files are tidy
         run: |
           go mod tidy
-          git diff --exit-code -- go.mod go.sum
+          if ! git diff --exit-code -- go.mod go.sum; then
+            echo "::error::go.mod / go.sum are not tidy. Run 'go mod tidy' and commit the result."
+            exit 1
+          fi
 
       - name: gofmt
         run: |
