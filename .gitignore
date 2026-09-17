@@ -45,3 +45,5 @@ cover.profile
 .DS_Store
 Thumbs.db
 TODO.md
+.kilo/
+.mimocode/
