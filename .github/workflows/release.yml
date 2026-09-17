@@ -56,8 +56,17 @@ jobs:
 
       - name: Validate
         run: |
+          for f in go.mod go.sum; do
+            if [ ! -f "$f" ]; then
+              echo "::error::Missing required Go module file: $f (see the repo's .gitignore)"
+              exit 1
+            fi
+          done
           go mod tidy
-          git diff --exit-code -- go.mod go.sum
+          if ! git diff --exit-code -- go.mod go.sum; then
+            echo "::error::go.mod / go.sum are not tidy. Run 'go mod tidy' and commit the result."
+            exit 1
+          fi
           go vet ./...
           go test ./...
 

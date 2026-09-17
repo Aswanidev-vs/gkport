@@ -1,0 +1,26 @@
+# Normalize all text files to LF in the repository.
+#
+# Developer machines (Windows, core.autocrlf=true) still get CRLF in the
+# working tree, but what CI checks out is always LF. This is what keeps
+# `gofmt -l` green on the Linux runners: gofmt rejects CRLF.
+
+* text=auto eol=lf
+
+# Go sources and module files must be LF for gofmt / go tooling.
+*.go   text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
+
+# Windows-only repo, but keep scripts and workflows LF too.
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.md   text eol=lf
+.gitignore     text eol=lf
+.gitattributes text eol=lf
+
+# Shell scripts must stay LF so they run on the Linux runners.
+*.sh text eol=lf
+
+# Binary files: no conversion, no diff.
+*.exe binary
+*.test binary

@@ -16,10 +16,6 @@ testdata_*
 go.work
 go.work.bin
 
-# Go dependencies
-/go.sum
-/go.mod
-
 # Output of the go coverage tool
 cover.out
 cover.profile
