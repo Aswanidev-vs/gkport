@@ -329,6 +329,15 @@ func protectedNotice(p PortInfo) string {
 	return fmt.Sprintf("⚠ Port %d is protected: %s. gkport will not kill it.", p.Port, p.ProtectReason)
 }
 
+// Session-0 processes stay unreadable without Administrator rights, so the
+// name can legitimately come back empty.
+func shortName(p PortInfo) string {
+	if name := strings.TrimSpace(p.Name); name != "" {
+		return name
+	}
+	return "(unknown)"
+}
+
 func shortCmdline(p PortInfo) string {
 	cmdline := strings.TrimSpace(p.Cmdline)
 	if cmdline == "" {
@@ -547,7 +556,7 @@ func (m model) View() string {
 				portLabel = lockedStyle.Render(fmt.Sprintf(":%-5d", p.Port))
 			}
 
-			line := fmt.Sprintf("%s %s%s PID %-6d", cursor, marker, portLabel, p.PID)
+			line := fmt.Sprintf("%s %s%s PID %-6d %-18s", cursor, marker, portLabel, p.PID, shortName(p))
 			if m.showPath {
 				line += "  " + shortCmdline(p)
 			}
