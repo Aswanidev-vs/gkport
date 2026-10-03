@@ -23,7 +23,7 @@ processes are flagged and blocked from both the TUI and the CLI.
 | Interactive TUI | Scrollable list, `j`/`k` or arrow keys, live status line |
 | Custom ports | Type any port (5173, 4200, …) to look it up on the fly |
 | CLI shortcuts | `--kill 3000`, `--kill-all`, and `-y` to skip prompts |
-| Process info | Shows **PID** per port, with a togglable **command line** view (`p`) |
+| Process info | Shows **PID** and **process name** per port, with a togglable **command line** view (`p`) |
 | Windows-native | gopsutil -> `proc.Kill()` -> `taskkill /F` fallback |
 | Single binary | ~4 MB stripped, no runtime dependencies |
 | Fail-safe | An unverifiable port is treated as protected, never killed |
@@ -140,10 +140,10 @@ Run `gkport.exe` (or `gkport.exe --interactive`).
 GKPort v0.2.2
 Listening TCP ports: 31    13 protected and cannot be killed
 
-> ⚠ :135   PID 2144
-  ⚠ :445   PID 4
-    :4096  PID 9200
-    :8787  PID 6504
+> ⚠ :135   PID 2144   svchost.exe
+  ⚠ :445   PID 4      System
+    :4096  PID 9200   node.exe
+    :8787  PID 6504   code.exe
 
 Up/Down: move  Enter: kill selected  p: toggle path  a: custom port  q: quit
 
@@ -157,7 +157,7 @@ automatically replaces the status line so you always see *why* it is blocked.
 Pressing `p` appends the owning command line to each row:
 
 ```
->   :3000  PID 14512  node C:\dev\my-app\node_modules\.bin\vite
+>   :3000  PID 14512  node.exe           node C:\dev\my-app\node_modules\.bin\vite
 ```
 
 **Controls**
