@@ -21,8 +21,14 @@ processes are flagged and blocked from both the TUI and the CLI.
 | Auto-scan | Every **LISTENING** TCP port — not just a preset list |
 | Protected ports | Privileged (<1024), known Windows service ports, system processes and SYSTEM-owned processes are flagged `⚠` and **cannot be killed** |
 | Interactive TUI | Scrollable list, `j`/`k` or arrow keys, live status line |
+| Live filter | `/` type-ahead filter by port, process name, command, or user |
+| Sorting | Cycle `port` → `pid` → `name` with `s` in the TUI, or `--sort=` on the CLI |
+| Process details | `i` (TUI) or JSON output show start time, RSS memory and CPU% per owner |
 | Custom ports | Type any port (5173, 4200, …) to look it up on the fly |
-| CLI shortcuts | `--kill 3000`, `--kill-all`, and `-y` to skip prompts |
+| CLI shortcuts | `--kill 3000`, `--kill 3000-3010`, `--kill-name node.exe`, `--kill-all`, and `-y` to skip prompts |
+| Machine-readable | `--json` and `--csv` listing output for scripting |
+| Dry run | `--dry-run` prints the exact kill plan without executing it |
+| Paging keys | `g`/`G`, `Home`/`End`, `PageUp`/`PageDown` |
 | Process info | Shows **PID** and **process name** per port, with a togglable **command line** view (`p`) |
 | Windows-native | gopsutil -> `proc.Kill()` -> `taskkill /F` fallback |
 | Single binary | ~4 MB stripped, no runtime dependencies |
@@ -83,13 +89,21 @@ A plain `go build` leaves it as `dev`.
 | `gkport.exe` | List every listening TCP port and open the interactive TUI |
 | `gkport.exe --kill 3000` | Kill a specific listening port (asks for confirmation) |
 | `gkport.exe --kill 3000 -y` | Same, but skip the confirmation prompt (scripts) |
+| `gkport.exe --kill 3000-3010` | Kill an inclusive **range** of ports (asks first, skips protected) |
+| `gkport.exe --kill-name node.exe` | Kill every port owned by a process name (asks first, skips protected) |
 | `gkport.exe --kill-all` | Kill all detected common dev ports (asks first, skips protected) |
 | `gkport.exe --kill-all -y` | Same, but skip the confirmation prompt |
+| `gkport.exe --dry-run --kill-all` | Print the kill plan without killing anything |
+| `gkport.exe --json` | Print the full port list as JSON and exit |
+| `gkport.exe --csv` | Print the full port list as CSV and exit |
+| `gkport.exe --sort=pid` | Sort any listing by `port` (default), `pid`, or `name` |
+| `gkport.exe --version` | Print the build version |
 | `gkport.exe --help` | Show help and the build version |
 | `gkport.exe --interactive` | Accepted for backwards compatibility — the TUI is already the default |
 
-**Exit codes**: `0` on success, `1` on an invalid port, a port that is not
-listening, a protected port, or a failed kill.
+**Exit codes**: `0` on success (including a dry run), `1` on an invalid port/range,
+a port that is not listening, a protected port, a failed kill, or invalid flag
+values.
 
 **Note**: `--kill` works for **any** listening TCP port, but refuses protected system ports.
 
@@ -116,6 +130,9 @@ never silently:
 ⚠ Skipped port 3000: it is owned by the SYSTEM account
 ```
 
+A PID that owns several ports is killed once — the extra ports are reported as
+a note instead of a spurious failure.
+
 Targeted kills are just as safe:
 
 ```console
@@ -132,6 +149,69 @@ $ echo $?
 1
 ```
 
+### Port ranges and kill-by-name
+
+`--kill` accepts a single port or an inclusive range:
+
+```console
+$ gkport.exe --dry-run --kill 3000-3003
+Port    PID     Cmdline                          User
+3000    9156    node ...vite                     BEASTGAMER\LENOVO
+3002    9157    node ...esbuild                  BEASTGAMER\LENOVO
+[dry-run] Would kill PID 9156 (port 3000)
+[dry-run] Would kill PID 9157 (port 3002)
+```
+
+`--kill-name` kills every listening port owned by one process name (exact,
+case-insensitive match — never a partial match):
+
+```console
+$ gkport.exe --dry-run --kill-name node.exe
+[...]
+[dry-run] Would kill PID 9156 (port 3000)
+```
+
+### Dry run
+
+`--dry-run` works with every kill mode (`--kill`, ranges, `--kill-name`,
+`--kill-all`): it prints the exact plan — including which ports it would refuse
+— and kills nothing. Exit code is `0`, so it is safe in pipelines:
+
+```console
+$ gkport.exe --dry-run --kill-all
+...
+[dry-run] Would kill PID 14512 (port 5173)
+```
+
+### Machine-readable output
+
+`--json` and `--csv` print the full listing (including the `protected` flag and
+`protect_reason`) and exit — ideal for scripts and status bars:
+
+```console
+$ gkport.exe --json --sort pid
+[
+  {
+    "port": 135,
+    "pid": 2148,
+    "cmdline": "",
+    "user": "",
+    "name": "",
+    "create_time_ms": 0,
+    "cpu_percent": 0,
+    "mem_rss_bytes": 0,
+    "protected": true,
+    "protect_reason": "port 135 is a privileged port reserved for OS services"
+  }
+]
+```
+
+```console
+$ gkport.exe --csv --sort name
+port,pid,name,user,protected,reason
+135,2148,(unknown),,true,port 135 is a privileged port reserved for OS services
+```
+
 ## Interactive TUI
 
 Run `gkport.exe` (or `gkport.exe --interactive`).
@@ -139,20 +219,22 @@ Run `gkport.exe` (or `gkport.exe --interactive`).
 ```
 GKPort v0.2.2
 Listening TCP ports: 31    13 protected and cannot be killed
+⚠ = protected: OS/service-owned — gkport will never kill it
 
 > ⚠ :135   PID 2144   svchost.exe
   ⚠ :445   PID 4      System
     :4096  PID 9200   node.exe
     :8787  PID 6504   code.exe
 
-Up/Down: move  Enter: kill selected  p: toggle path  a: custom port  q: quit
+↑/↓: move  enter: kill  /: filter  a: port  p: path  i: info  s: sort  q: quit
 
 ⚠ Port 135 is protected: Windows RPC endpoint mapper. gkport will not kill it.
 ```
 
 The list is a single scrolling window sized to your terminal, with the selected
-row marked by `>`. When the selected port is protected, the ⚠ notice
-automatically replaces the status line so you always see *why* it is blocked.
+row marked by `>`. When the selected port is protected, the ⚠ notice appears
+above the status line so you always see *why* it is blocked. The header always
+shows the `⚠ = protected` legend, and rows are truncated to the terminal width.
 
 Pressing `p` appends the owning command line to each row:
 
@@ -160,20 +242,36 @@ Pressing `p` appends the owning command line to each row:
 >   :3000  PID 14512  node.exe           node C:\dev\my-app\node_modules\.bin\vite
 ```
 
+Pressing `i` appends process details — uptime, resident memory, and CPU%
+(since process start):
+
+```
+>   :3000  PID 14512  node.exe  · up 2h · 312.4MB · 4.2% cpu
+```
+
+If the terminal is smaller than 40x10, gkport shows a resize notice instead of
+a garbled screen.
+
 **Controls**
 
 | Key | Action |
 |---|---|
 | `Up`/`k`, `Down`/`j` | Move the selection |
+| `g`/`Home`, `G`/`End` | Jump to the top / bottom of the list |
+| `PageUp`/`PageDown` | Move by a screenful |
 | `Enter` | Select the port and ask for confirmation |
-| `y` | Confirm the kill |
-| `n` or `Esc` | Cancel the confirmation |
-| `p` | Toggle the command-line column |
+| `y` | Confirm the kill (any other key cancels) |
+| `/` | Live filter by port, name, command, or user |
 | `a` | Enter a custom port number |
-| `q` or `Ctrl+C` | Quit |
+| `p` | Toggle the command-line column |
+| `i` | Toggle process details (uptime, memory, CPU%) |
+| `s` | Cycle sort order: port → pid → name |
+| `q` or `Ctrl+C` | Quit (`Ctrl+C` works from every mode) |
 
 **Pro tip**: The `a` prompt looks up **any** listening TCP port system-wide
-(handy for `4200`, `8787`, `24000`, …), not just the preset dev list.
+(handy for `4200`, `8787`, `24000`, …), not just the preset dev list. The `/`
+filter matches across all columns, so `vite` or `5173` narrows the list
+instantly; `Esc` clears it.
 
 ## Protected Ports
 
@@ -218,8 +316,12 @@ Killed PID 14512 (port 5173)
 - **Admin rights** reveal service-owned ports; without them those ports are
   treated as protected (fail-safe, never fail-open)
 - **Safe by default**: every kill asks for confirmation unless you pass `-y`
-- **Real-time**: the TUI rescans automatically after each kill
+- **Real-time**: the TUI rescans automatically after each kill, and waits for
+  Windows to release the killed socket first — so you never see a dead owner
+  linger in the list as `(unknown)`
 - **Windows-only** process info (gopsutil + `taskkill` fallback)
+- **Tests**: `go test ./...` covers the safety classifier, port specs, sort,
+  filter, and a kill-then-rescan regression test (Windows)
 - MIT License — feel free to fork/extend!
 
 ## Contributing
@@ -264,12 +366,16 @@ gkport
  +-- scanListeningPorts()   gopsutil/net Connections("tcp") -> keep LISTEN
  +-- protectReason()        classify each port as safe or protected
  +-- killPID()              gopsutil/Kill -> taskkill /F fallback
+ +-- waitPortGone()         poll until Windows releases the killed socket
+ +-- killPorts()            loud, never-silent skips + --dry-run support
 ```
 
-* **All logic lives in one file**, [`main.go`](main.go) (~700 lines) — no `internal/` packages.
+* **All logic lives in one file**, [`main.go`](main.go) (~1050 lines) — no `internal/` packages.
 * Ports are de-duplicated by number, so a dual-stack (IPv4 + IPv6) server appears once.
 * `--kill-all` reuses the full scan and filters it by `commonDevPorts`, so it can
   never touch a port outside the dev set even if it is unprotected.
+* Every kill funnels through `protectReason()` — the TUI, `--kill`, ranges,
+  `--kill-name` and `--kill-all` share the same classifier.
 
 ## Screenshots
 
