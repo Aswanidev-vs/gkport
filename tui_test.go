@@ -37,7 +37,7 @@ func testModel() model {
 		{Port: 3000, PID: 100, Name: "node.exe", User: "dev"},
 		{Port: 5173, PID: 200, Name: "node.exe", User: "dev"},
 		{Port: 135, PID: 300, Name: "svchost.exe", User: "SYSTEM", Protected: true, ProtectReason: "privileged"},
-	})
+	}, "port")
 }
 
 func TestCtrlCQuitsFromEveryMode(t *testing.T) {
@@ -71,12 +71,15 @@ func TestConfirmBlockedWhileKilling(t *testing.T) {
 	m.selected = &m.ports[0]
 	m.mode = modeConfirm
 	m.killing = true
-	updated, _ := m.updateConfirm(key("y"))
+	updated, cmd := m.updateConfirm(key("y"))
 	got := updated.(model)
-	// A second "y" must not fire another kill: no new kill cmd, back to
-	// browse; killing stays true until the in-flight killResultMsg arrives.
-	if got.mode != modeBrowse || got.selected != nil || !got.killing {
-		t.Errorf("double-kill guard failed: mode=%d selected=%v killing=%v", got.mode, got.selected, got.killing)
+	// While a kill is in flight all keys are locked: no second kill, no cancel,
+	// state stays in confirm mode until killResultMsg arrives.
+	if got.mode != modeConfirm || got.selected == nil || !got.killing {
+		t.Errorf("kill lock failed: mode=%d selected=%v killing=%v", got.mode, got.selected, got.killing)
+	}
+	if cmd != nil {
+		t.Errorf("locked key fired a command")
 	}
 }
 
