@@ -36,7 +36,7 @@ type PortInfo struct {
 
 // Overridden at build time by the release workflow:
 // go build -ldflags "-X main.version=v1.2.3".
-var version = "v0.4.0"
+var version = "v0.4.1"
 
 var commonDevPorts = []int{3000, 3001, 3002, 4000, 5000, 5001, 8000, 5173, 8001, 8080, 8081, 9000, 9090}
 
@@ -105,7 +105,31 @@ var (
 	warnMark    = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
 	lockedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 	warnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	headerBox   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Padding(0, 1)
 )
+
+// applyStyles rebuilds the package-level styles for the given color profile so the
+// TUI stays readable on both dark and light terminals.
+func applyStyles(isDark bool) {
+	if isDark {
+		titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
+		helpStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
+		cursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
+		portStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("228"))
+		warnMark = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
+		lockedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+		warnStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	} else {
+		titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("28"))
+		helpStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+		cursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("129"))
+		portStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("136"))
+		warnMark = lipgloss.NewStyle().Foreground(lipgloss.Color("124")).Bold(true)
+		lockedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+		warnStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("166"))
+	}
+	headerBox = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Padding(0, 1)
+}
 
 type appMode int
 
@@ -137,6 +161,7 @@ type model struct {
 	killing   bool
 	filter    string
 	sortKey   string
+	isDark    bool
 }
 
 // protectReason explains why a port must not be killed, or returns "" when it
@@ -306,7 +331,12 @@ func waitPortGone(portNum int, timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		info, err := findListeningPort(portNum)
-		if err != nil || info == nil {
+		if err != nil {
+			// Scan failed; don't assume the port is gone — retry.
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+		if info == nil {
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -392,8 +422,9 @@ func shortCmdline(p PortInfo) string {
 	if cmdline == "" {
 		return "(command unavailable)"
 	}
-	if len(cmdline) > 70 {
-		return cmdline[:67] + "..."
+	runes := []rune(cmdline)
+	if len(runes) > 70 {
+		return string(runes[:67]) + "..."
 	}
 	return cmdline
 }
@@ -508,17 +539,23 @@ func detailsSuffix(p PortInfo) string {
 	return fmt.Sprintf(" · up %s · %s · %.1f%% cpu", humanDur(time.Since(time.UnixMilli(p.CreateTime))), mem, p.CPUPercent)
 }
 
-func newModel(ports []PortInfo) model {
+func newModel(ports []PortInfo, sortKey string) model {
+	applyStyles(true)
 	ti := textinput.New()
 	ti.Placeholder = "Enter any listening port, e.g. 5173"
-	ti.CharLimit = 5
+	ti.CharLimit = 64
 	ti.Width = 30
+
+	if strings.TrimSpace(sortKey) == "" {
+		sortKey = "port"
+	}
 
 	return model{
 		ports:     ports,
 		textInput: ti,
-		sortKey:   "port",
+		sortKey:   sortKey,
 		status:    "Select a port to kill, or press a to enter one manually.",
+		isDark:    true,
 	}
 }
 
@@ -541,6 +578,7 @@ func (m model) visiblePorts() []PortInfo {
 		if strings.Contains(strings.ToLower(shortName(p)), f) ||
 			strings.Contains(strings.ToLower(shortCmdline(p)), f) ||
 			strings.Contains(strings.ToLower(p.User), f) ||
+			strings.Contains(strconv.Itoa(int(p.PID)), f) ||
 			strings.Contains(strconv.Itoa(p.Port), f) {
 			out = append(out, p)
 		}
@@ -600,6 +638,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.height = msg.Height
 		m.width = msg.Width
+		m.textInput.Width = max(20, m.width-4)
 		return m, nil
 	case killResultMsg:
 		m.killing = false
@@ -607,8 +646,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "Error: " + errText(msg.err)
 		} else {
 			m.status = msg.message
-			m.ports, _ = scanListeningPorts()
-			m.clampCursor()
+			if ports, err := scanListeningPorts(); err != nil {
+				m.status = msg.message + " (rescan failed: " + err.Error() + ")"
+			} else {
+				m.ports = ports
+				sortPorts(m.ports, m.sortKey)
+				m.clampCursor()
+			}
 		}
 		m.mode = modeBrowse
 		m.selected = nil
@@ -648,7 +692,7 @@ func (m model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "pgup":
 		m.cursor = max(0, m.cursor-m.visibleRows())
 	case "pgdown":
-		m.cursor = min(len(visible)-1, m.cursor+m.visibleRows())
+		m.cursor = max(0, min(len(visible)-1, m.cursor+m.visibleRows()))
 	case "p":
 		m.showPath = !m.showPath
 		if m.showPath {
@@ -663,6 +707,13 @@ func (m model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "Process details enabled."
 		} else {
 			m.status = "Process details disabled."
+		}
+		return m, nil
+	case "esc":
+		if m.filter != "" {
+			m.filter = ""
+			m.clampCursor()
+			m.status = "Filter cleared."
 		}
 		return m, nil
 	case "s":
@@ -772,6 +823,9 @@ func (m model) updateCustomInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.killing {
+		return m, nil
+	}
 	if strings.ToLower(msg.String()) == "y" {
 		if m.killing || m.selected == nil {
 			m.mode = modeBrowse
@@ -807,8 +861,8 @@ func (m model) View() string {
 	}
 
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("GKPort"))
-	b.WriteString(helpStyle.Render(" " + version))
+	header := titleStyle.Render("GKPort") + helpStyle.Render(" "+version) + helpStyle.Render("  sort: "+m.sortKey)
+	b.WriteString(headerBox.Render(header))
 	b.WriteString("\n")
 	visible := m.visiblePorts()
 	b.WriteString(fmt.Sprintf("Listening TCP ports: %d", len(visible)))
@@ -836,7 +890,7 @@ func (m model) View() string {
 		for i := start; i < end; i++ {
 			p := visible[i]
 			cursor := " "
-			if i == m.cursor && m.mode == modeBrowse {
+			if i == m.cursor && (m.mode == modeBrowse || m.mode == modeFilter) {
 				cursor = cursorStyle.Render(">")
 			}
 
@@ -898,8 +952,8 @@ func (m model) View() string {
 	return b.String()
 }
 
-func runInteractive(ports []PortInfo) error {
-	p := tea.NewProgram(newModel(ports), tea.WithAltScreen())
+func runInteractive(ports []PortInfo, sortKey string) error {
+	p := tea.NewProgram(newModel(ports, sortKey), tea.WithAltScreen())
 	_, err := p.Run()
 	return err
 }
@@ -1002,7 +1056,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := runInteractive(ports); err != nil {
+	sortPorts(ports, *sortKey)
+	if err := runInteractive(ports, *sortKey); err != nil {
 		color.Red("Error: %v", err)
 		os.Exit(1)
 	}
