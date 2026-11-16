@@ -19,8 +19,8 @@ processes are flagged and blocked from both the TUI and the CLI.
 | Feature | Description |
 |---|---|
 | Auto-scan | Every **LISTENING** TCP port — not just a preset list |
-| Protected ports | Privileged (<1024), known Windows service ports, system processes and SYSTEM-owned processes are flagged `⚠` and **cannot be killed** |
-| Interactive TUI | Scrollable list, `j`/`k` or arrow keys, live status line |
+| Protected ports | Privileged (<1024), known Windows service ports, system processes and SYSTEM-owned processes are marked `⚠` and **cannot be killed** |
+| Interactive TUI | Table view sized to your terminal, `j`/`k`, arrow keys or mouse wheel, live status line |
 | Live filter | `/` type-ahead filter by port, process name, command, or user |
 | Sorting | Cycle `port` → `pid` → `name` with `s` in the TUI, or `--sort=` on the CLI |
 | Process details | `i` (TUI) or JSON output show start time, RSS memory and CPU% per owner |
@@ -217,36 +217,48 @@ port,pid,name,user,protected,reason
 Run `gkport.exe` (or `gkport.exe --interactive`).
 
 ```
-GKPort v0.2.2
-Listening TCP ports: 31    13 protected and cannot be killed
-⚠ = protected: OS/service-owned — gkport will never kill it
+gkport v0.4.2                                           18 killable   13 protected
+────────────────────────────────────────────────────────────────────────────────
+    PORT    PID  PROCESS               USER
+    135   2148  svchost.exe           NT AUTHORITY\SYSTEM
+⚠   445      4  System                NT AUTHORITY\SYSTEM
+>  3000  14512  node.exe              BEASTGAMER\LENOVO
+    5173   9200  node.exe              BEASTGAMER\LENOVO
+    8787   6504  code.exe              BEASTGAMER\LENOVO
+   49670   7104  ChatGPT.exe           BEASTGAMER\LENOVO
+   50312   9844  python.exe            BEASTGAMER\LENOVO
 
-> ⚠ :135   PID 2144   svchost.exe
-  ⚠ :445   PID 4      System
-    :4096  PID 9200   node.exe
-    :8787  PID 6504   code.exe
-
-↑/↓: move  enter: kill  /: filter  a: port  p: path  i: info  s: sort  q: quit
-
-⚠ Port 135 is protected: Windows RPC endpoint mapper. gkport will not kill it.
+Port 445 is protected — SMB file sharing
+────────────────────────────────────────────────────────────────────────────────
+4 / 31
+↑↓ move   ↵ kill   / filter   a port   p path   i info   s sort   q quit
 ```
 
-The list is a single scrolling window sized to your terminal, with the selected
-row marked by `>`. When the selected port is protected, the ⚠ notice appears
-above the status line so you always see *why* it is blocked. The header always
-shows the `⚠ = protected` legend, and rows are truncated to the terminal width.
+The list is one scrolling table sized to your terminal. Columns line up on fixed
+widths, and the **active sort column in the header is the bright one**, so you can
+always see what the list is ordered by.
+
+Rows that gkport will not touch **recede instead of shouting**: they drop to the dim
+step and carry a `⚠` in the marker column, so the ports you can actually kill are
+the bright ones. Put the cursor on one and the reason is spelled out on its own
+line — it never hides behind a status message.
+
+The selected row is a full-width bar (`>`), which stays readable however many
+columns you turn on. The footer is a fixed three lines (notice, status, hints), so
+opening the filter or the kill confirmation never shifts the list under the cursor.
+The mouse wheel scrolls.
 
 Pressing `p` appends the owning command line to each row:
 
 ```
->   :3000  PID 14512  node.exe           node C:\dev\my-app\node_modules\.bin\vite
+>  3000  14512  node.exe              BEASTGAMER\LENOVO  node C:\dev\my-app\node_modules\.bin\vite
 ```
 
 Pressing `i` appends process details — uptime, resident memory, and CPU%
 (since process start):
 
 ```
->   :3000  PID 14512  node.exe  · up 2h · 312.4MB · 4.2% cpu
+>  3000  14512  node.exe              BEASTGAMER\LENOVO  up 2h, 312.4MB, 4.2% cpu
 ```
 
 If the terminal is smaller than 40x10, gkport shows a resize notice instead of
@@ -257,6 +269,7 @@ a garbled screen.
 | Key | Action |
 |---|---|
 | `Up`/`k`, `Down`/`j` | Move the selection |
+| Mouse wheel | Scroll the list |
 | `g`/`Home`, `G`/`End` | Jump to the top / bottom of the list |
 | `PageUp`/`PageDown` | Move by a screenful |
 | `Enter` | Select the port and ask for confirmation |

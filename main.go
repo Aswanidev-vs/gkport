@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -36,7 +37,7 @@ type PortInfo struct {
 
 // Overridden at build time by the release workflow:
 // go build -ldflags "-X main.version=v1.2.3".
-var version = "v0.4.1"
+var version = "v0.4.2"
 
 var commonDevPorts = []int{3000, 3001, 3002, 4000, 5000, 5001, 8000, 5173, 8001, 8080, 8081, 9000, 9090}
 
@@ -97,39 +98,32 @@ var systemUsers = map[string]string{
 	"root":                          "root",
 }
 
+// Palette. A cool graphite ramp tinted toward the socket table it renders, with
+// a single teal accent for the row you can act on and ochre reserved for "may not
+// kill". Protected rows recede to the dim step instead of shouting in red: the
+// eye should land on what you can terminate, not on what you cannot.
 var (
-	titleStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
-	helpStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
-	cursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
-	portStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("228"))
-	warnMark    = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
-	lockedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	warnStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	headerBox   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Padding(0, 1)
+	cText   = lipgloss.AdaptiveColor{Light: "#23282E", Dark: "#D3D8DE"}
+	cDim    = lipgloss.AdaptiveColor{Light: "#5A636D", Dark: "#9AA3AC"}
+	cFaint  = lipgloss.AdaptiveColor{Light: "#69727C", Dark: "#79818A"}
+	cAccent = lipgloss.AdaptiveColor{Light: "#16695E", Dark: "#5FB3A4"}
+	cNotice = lipgloss.AdaptiveColor{Light: "#8A6A33", Dark: "#C09A5B"}
+	cDanger = lipgloss.AdaptiveColor{Light: "#A93B26", Dark: "#E0785F"}
+	cRule   = lipgloss.AdaptiveColor{Light: "#D2D8DE", Dark: "#2E343B"}
+	cSelBg  = lipgloss.AdaptiveColor{Light: "#E6EAEE", Dark: "#171C22"}
 )
 
-// applyStyles rebuilds the package-level styles for the given color profile so the
-// TUI stays readable on both dark and light terminals.
-func applyStyles(isDark bool) {
-	if isDark {
-		titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("86"))
-		helpStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("250"))
-		cursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
-		portStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("228"))
-		warnMark = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true)
-		lockedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-		warnStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	} else {
-		titleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("28"))
-		helpStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
-		cursorStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("129"))
-		portStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("136"))
-		warnMark = lipgloss.NewStyle().Foreground(lipgloss.Color("124")).Bold(true)
-		lockedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-		warnStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("166"))
-	}
-	headerBox = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Padding(0, 1)
-}
+var (
+	titleStyle  = lipgloss.NewStyle().Foreground(cAccent).Bold(true)
+	textStyle   = lipgloss.NewStyle().Foreground(cText)
+	dimStyle    = lipgloss.NewStyle().Foreground(cDim)
+	faintStyle  = lipgloss.NewStyle().Foreground(cFaint)
+	accentStyle = lipgloss.NewStyle().Foreground(cAccent)
+	noticeStyle = lipgloss.NewStyle().Foreground(cNotice)
+	dangerStyle = lipgloss.NewStyle().Foreground(cDanger)
+	ruleStyle   = lipgloss.NewStyle().Foreground(cRule)
+	selRowStyle = lipgloss.NewStyle().Foreground(cText).Background(cSelBg)
+)
 
 type appMode int
 
@@ -146,6 +140,13 @@ type killResultMsg struct {
 	port    int
 }
 
+// portsMsg carries a rescan off the UI thread. Scanning every TCP connection and
+// resolving each owner costs long enough to drop frames if it runs inside Update.
+type portsMsg struct {
+	ports []PortInfo
+	err   error
+}
+
 type model struct {
 	ports     []PortInfo
 	cursor    int
@@ -153,6 +154,7 @@ type model struct {
 	width     int
 	mode      appMode
 	textInput textinput.Model
+	spinner   spinner.Model
 	selected  *PortInfo
 	status    string
 	quitting  bool
@@ -161,7 +163,6 @@ type model struct {
 	killing   bool
 	filter    string
 	sortKey   string
-	isDark    bool
 }
 
 // protectReason explains why a port must not be killed, or returns "" when it
@@ -250,6 +251,19 @@ func scanListeningPorts() ([]PortInfo, error) {
 	return ports, nil
 }
 
+// scanPortsCmd runs a full rescan off the UI thread and reports it through
+// portsMsg, so a kill does not freeze the frame that confirms it.
+func scanPortsCmd(sortKey string) tea.Cmd {
+	return func() tea.Msg {
+		ports, err := scanListeningPorts()
+		if err != nil {
+			return portsMsg{err: err}
+		}
+		sortPorts(ports, sortKey)
+		return portsMsg{ports: ports}
+	}
+}
+
 func scanDevPorts() ([]PortInfo, error) {
 	allPorts, err := scanListeningPorts()
 	if err != nil {
@@ -323,23 +337,34 @@ func killPID(pid int32) error {
 	return nil
 }
 
+// portStillListening reports whether a TCP socket is still in LISTEN on portNum.
+// It reads only the connection table: the full rescan that also resolves every
+// owner process is far too heavy to run as a poll.
+func portStillListening(portNum int) bool {
+	conns, err := net.Connections("tcp")
+	if err != nil {
+		return true
+	}
+	for _, conn := range conns {
+		if conn.Status == "LISTEN" && int(conn.Laddr.Port) == portNum {
+			return true
+		}
+	}
+	return false
+}
+
 // waitPortGone blocks until the port leaves the TCP table (or the timeout
 // expires). Windows releases a terminated process's sockets asynchronously,
 // so an immediate rescan would still find the dead owner's LISTEN entry with
-// an unresolvable name and render it as "(unknown)".
+// an unresolvable name and render it as "(unknown)". The delay backs off because
+// the socket is almost always gone within the first poll or two.
 func waitPortGone(portNum int, timeout time.Duration) {
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		info, err := findListeningPort(portNum)
-		if err != nil {
-			// Scan failed; don't assume the port is gone — retry.
-			time.Sleep(50 * time.Millisecond)
-			continue
-		}
-		if info == nil {
+	for delay := 50 * time.Millisecond; ; delay *= 2 {
+		if !portStillListening(portNum) || !time.Now().Before(deadline) {
 			return
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(min(delay, 250*time.Millisecond))
 	}
 }
 
@@ -405,7 +430,7 @@ func countProtected(ports []PortInfo) int {
 }
 
 func protectedNotice(p PortInfo) string {
-	return fmt.Sprintf("⚠ Port %d is protected: %s. gkport will not kill it.", p.Port, p.ProtectReason)
+	return fmt.Sprintf("Port %d is protected — %s", p.Port, p.ProtectReason)
 }
 
 // Session-0 processes stay unreadable without Administrator rights, so the
@@ -531,20 +556,30 @@ func humanDur(d time.Duration) string {
 	}
 }
 
+// detailsSuffix renders the process facts appended by the "i" toggle.
 func detailsSuffix(p PortInfo) string {
-	if p.CreateTime <= 0 {
-		return ""
+	parts := make([]string, 0, 3)
+	if p.CreateTime > 0 {
+		parts = append(parts, "up "+humanDur(time.Since(time.UnixMilli(p.CreateTime))))
 	}
-	mem := fmt.Sprintf("%.1fMB", float64(p.MemRSS)/(1024*1024))
-	return fmt.Sprintf(" · up %s · %s · %.1f%% cpu", humanDur(time.Since(time.UnixMilli(p.CreateTime))), mem, p.CPUPercent)
+	if p.MemRSS > 0 {
+		parts = append(parts, fmt.Sprintf("%.1fMB", float64(p.MemRSS)/(1024*1024)))
+	}
+	if p.CPUPercent > 0 {
+		parts = append(parts, fmt.Sprintf("%.1f%% cpu", p.CPUPercent))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func newModel(ports []PortInfo, sortKey string) model {
-	applyStyles(true)
 	ti := textinput.New()
-	ti.Placeholder = "Enter any listening port, e.g. 5173"
+	ti.Prompt = ""
+	ti.Placeholder = "port, process, command or user"
 	ti.CharLimit = 64
-	ti.Width = 30
+	ti.PlaceholderStyle = faintStyle
+	ti.TextStyle = textStyle
+	ti.Cursor.Style = accentStyle
+	ti.Cursor.TextStyle = accentStyle
 
 	if strings.TrimSpace(sortKey) == "" {
 		sortKey = "port"
@@ -553,17 +588,184 @@ func newModel(ports []PortInfo, sortKey string) model {
 	return model{
 		ports:     ports,
 		textInput: ti,
+		spinner:   spinner.New(spinner.WithSpinner(spinner.MiniDot)),
 		sortKey:   sortKey,
-		status:    "Select a port to kill, or press a to enter one manually.",
-		isDark:    true,
 	}
 }
+
+// chromeLines counts the fixed lines View draws around the list: title, rule,
+// column header, protection notice, rule, status and hints. Keeping this constant
+// is what stops the footer from shifting the list around as you change modes.
+const chromeLines = 7
 
 func (m model) visibleRows() int {
 	if m.height <= 0 {
 		return 15
 	}
-	return max(m.height-7, 3)
+	return max(m.height-chromeLines, 3)
+}
+
+// Column widths shared by the column header and every row so they cannot drift.
+const (
+	markerW = 2
+	portW   = 5
+	pidW    = 6
+	nameW   = 20
+)
+
+func padLeft(s string, w int) string {
+	if n := lipgloss.Width(s); n < w {
+		return strings.Repeat(" ", w-n) + s
+	}
+	return ansi.Truncate(s, w, "")
+}
+
+func padRight(s string, w int) string {
+	if n := lipgloss.Width(s); n < w {
+		return s + strings.Repeat(" ", w-n)
+	}
+	return ansi.Truncate(s, w, "")
+}
+
+func rule(width int) string {
+	if width <= 0 {
+		width = 40
+	}
+	return ruleStyle.Render(strings.Repeat("─", width))
+}
+
+// markerCell keeps the marker column exactly two cells wide even in terminals that
+// disagree about the glyph's width.
+func markerCell(glyph string, style lipgloss.Style) string {
+	s := style.Render(glyph)
+	return s + strings.Repeat(" ", max(0, markerW-lipgloss.Width(s)))
+}
+
+func (m model) columnHeader() string {
+	label := func(name, key string) string {
+		if m.sortKey == key {
+			return textStyle.Render(name)
+		}
+		return faintStyle.Render(name)
+	}
+	return "   " +
+		padLeft(label("PORT", "port"), portW) + " " +
+		padLeft(label("PID", "pid"), pidW) + "  " +
+		padRight(label("PROCESS", "name"), nameW) + "  " +
+		label("USER", "")
+}
+
+func (m model) renderRow(p PortInfo, selected bool) string {
+	port := fmt.Sprintf("%*d", portW, p.Port)
+	pid := fmt.Sprintf("%*d", pidW, p.PID)
+	name := padRight(shortName(p), nameW)
+
+	extra := ""
+	if m.showPath {
+		extra += "  " + shortCmdline(p)
+	}
+	if suffix := detailsSuffix(p); m.showInfo && suffix != "" {
+		extra += "  " + suffix
+	}
+
+	// A selected row is one unbroken run. lipgloss closes every styled span with a
+	// reset, so a background wrapped around per-column styles would not survive
+	// them — the bar only holds if the whole row is a single style.
+	if selected {
+		line := "> " + port + " " + pid + "  " + name + "  " + p.User + extra
+		if m.width > 0 {
+			line = padRight(ansi.Truncate(line, m.width, "…"), m.width)
+		}
+		return selRowStyle.Render(line)
+	}
+
+	marker, base, portColumn := "  ", textStyle, accentStyle
+	if p.Protected {
+		marker, base, portColumn = markerCell("⚠", noticeStyle), dimStyle, dimStyle
+	}
+
+	line := marker + " " +
+		portColumn.Render(port) + " " +
+		dimStyle.Render(pid) + "  " +
+		base.Render(name) + "  " +
+		base.Render(p.User)
+	if extra != "" {
+		line += dimStyle.Render(extra)
+	}
+	if m.width > 0 {
+		line = ansi.Truncate(line, m.width, "…")
+	}
+	return line
+}
+
+func (m model) emptyText() string {
+	if m.filter != "" {
+		return fmt.Sprintf("nothing matches %q", m.filter)
+	}
+	return "nothing is listening on TCP"
+}
+
+func (m model) statusLine() string {
+	switch m.mode {
+	case modeCustomInput:
+		return accentStyle.Render("port") + "  " + m.textInput.View()
+	case modeFilter:
+		return accentStyle.Render("filter") + "  " + m.textInput.View()
+	case modeConfirm:
+		if m.killing {
+			return m.spinner.View() + "  " + dimStyle.Render(fmt.Sprintf("killing port %d (pid %d)…", m.selected.Port, m.selected.PID))
+		}
+		if m.selected == nil {
+			return dimStyle.Render("nothing selected")
+		}
+		return dangerStyle.Render(fmt.Sprintf("kill port %d", m.selected.Port)) +
+			dimStyle.Render(fmt.Sprintf("   pid %d", m.selected.PID))
+	}
+	if m.status != "" {
+		return dimStyle.Render(m.status)
+	}
+	visible := m.visiblePorts()
+	if len(visible) == 0 {
+		return ""
+	}
+	return faintStyle.Render(fmt.Sprintf("%d / %d", m.cursor+1, len(visible)))
+}
+
+func (m model) protectionLine() string {
+	if m.mode != modeBrowse {
+		return ""
+	}
+	visible := m.visiblePorts()
+	if m.cursor >= len(visible) || !visible[m.cursor].Protected {
+		return ""
+	}
+	return noticeStyle.Render(protectedNotice(visible[m.cursor]))
+}
+
+func hintLine(mode appMode, filtering bool) string {
+	type hint struct{ key, label string }
+	var hints []hint
+	switch mode {
+	case modeCustomInput:
+		hints = []hint{{"enter", "lookup"}, {"esc", "back"}}
+	case modeFilter:
+		hints = []hint{{"enter", "apply"}, {"esc", "clear"}}
+	case modeConfirm:
+		hints = []hint{{"y", "confirm"}, {"any other", "cancel"}}
+	default:
+		hints = []hint{
+			{"↑↓", "move"}, {"↵", "kill"}, {"/", "filter"}, {"a", "port"},
+			{"p", "path"}, {"i", "info"}, {"s", "sort"}, {"q", "quit"},
+		}
+		if filtering {
+			hints = append(hints, hint{"esc", "clear filter"})
+		}
+	}
+	parts := make([]string, 0, len(hints))
+	for _, h := range hints {
+		parts = append(parts, dimStyle.Render(h.key)+" "+faintStyle.Render(h.label))
+	}
+	return strings.Join(parts, "   ")
 }
 
 // visiblePorts applies the live filter over the scanned ports; navigation and
@@ -608,8 +810,15 @@ func (m *model) cycleSort() {
 		m.sortKey = "port"
 	}
 	sortPorts(m.ports, m.sortKey)
-	m.status = "Sorted by " + m.sortKey + "."
+	m.status = "sorted by " + m.sortKey
 	m.clampCursor()
+}
+
+func onOff(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
 }
 
 func (m model) Init() tea.Cmd {
@@ -635,27 +844,52 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case modeFilter:
 			return m.updateFilter(msg)
 		}
+	case tea.MouseMsg:
+		// Only the wheel is bound; without it a mouse-driven terminal gives no
+		// way to scroll the list at all.
+		if msg.Action != tea.MouseActionPress {
+			return m, nil
+		}
+		if m.mode == modeConfirm || m.mode == modeFilter || m.mode == modeCustomInput {
+			return m, nil
+		}
+		visible := m.visiblePorts()
+		switch msg.Button {
+		case tea.MouseButtonWheelUp:
+			m.cursor = max(0, m.cursor-1)
+		case tea.MouseButtonWheelDown:
+			m.cursor = max(0, min(len(visible)-1, m.cursor+1))
+		default:
+			return m, nil
+		}
+		m.status = ""
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.height = msg.Height
 		m.width = msg.Width
 		m.textInput.Width = max(20, m.width-4)
 		return m, nil
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
 	case killResultMsg:
 		m.killing = false
-		if msg.err != nil {
-			m.status = "Error: " + errText(msg.err)
-		} else {
-			m.status = msg.message
-			if ports, err := scanListeningPorts(); err != nil {
-				m.status = msg.message + " (rescan failed: " + err.Error() + ")"
-			} else {
-				m.ports = ports
-				sortPorts(m.ports, m.sortKey)
-				m.clampCursor()
-			}
-		}
 		m.mode = modeBrowse
 		m.selected = nil
+		if msg.err != nil {
+			m.status = "Error: " + errText(msg.err)
+			return m, nil
+		}
+		m.status = msg.message
+		return m, scanPortsCmd(m.sortKey)
+	case portsMsg:
+		if msg.err != nil {
+			m.status += " (rescan failed: " + msg.err.Error() + ")"
+			return m, nil
+		}
+		m.ports = msg.ports
+		m.clampCursor()
 		return m, nil
 	}
 
@@ -680,34 +914,32 @@ func (m model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
+			m.status = ""
 		}
 	case "down", "j":
 		if m.cursor < len(visible)-1 {
 			m.cursor++
+			m.status = ""
 		}
 	case "home", "g":
 		m.cursor = 0
+		m.status = ""
 	case "end", "G":
 		m.cursor = max(0, len(visible)-1)
+		m.status = ""
 	case "pgup":
 		m.cursor = max(0, m.cursor-m.visibleRows())
+		m.status = ""
 	case "pgdown":
 		m.cursor = max(0, min(len(visible)-1, m.cursor+m.visibleRows()))
+		m.status = ""
 	case "p":
 		m.showPath = !m.showPath
-		if m.showPath {
-			m.status = "Path display enabled."
-		} else {
-			m.status = "Path display disabled."
-		}
+		m.status = "command line " + onOff(m.showPath)
 		return m, nil
 	case "i":
 		m.showInfo = !m.showInfo
-		if m.showInfo {
-			m.status = "Process details enabled."
-		} else {
-			m.status = "Process details disabled."
-		}
+		m.status = "process details " + onOff(m.showInfo)
 		return m, nil
 	case "esc":
 		if m.filter != "" {
@@ -724,32 +956,25 @@ func (m model) updateBrowse(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.textInput.SetValue("")
 		m.textInput.Placeholder = "Filter by port, name, or command…"
 		m.textInput.Focus()
-		m.status = "Type to filter. Enter applies, Esc clears."
 		return m, textinput.Blink
 	case "a":
 		m.mode = modeCustomInput
 		m.textInput.SetValue("")
 		m.textInput.Placeholder = "Enter any listening port, e.g. 5173"
 		m.textInput.Focus()
-		m.status = "Enter a listening port number to kill."
 		return m, textinput.Blink
 	case "enter":
 		if len(visible) == 0 {
-			if m.filter != "" {
-				m.status = fmt.Sprintf("No port matches filter %q.", m.filter)
-			} else {
-				m.status = "Nothing is listening. Press a to enter a port manually."
-			}
+			m.status = m.emptyText()
 			return m, nil
 		}
 		selected := visible[m.cursor]
 		if selected.Protected {
-			m.status = protectedNotice(selected)
 			return m, nil
 		}
 		m.selected = &selected
 		m.mode = modeConfirm
-		m.status = fmt.Sprintf("Confirm kill for port %d (PID %d).", selected.Port, selected.PID)
+		m.status = ""
 	}
 
 	return m, nil
@@ -762,12 +987,12 @@ func (m model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.textInput.Blur()
 		m.filter = ""
 		m.clampCursor()
-		m.status = "Filter cleared."
+		m.status = ""
 		return m, nil
 	case "enter":
 		m.mode = modeBrowse
 		m.textInput.Blur()
-		m.status = "Filter applied."
+		m.status = ""
 		m.clampCursor()
 		return m, nil
 	}
@@ -784,13 +1009,13 @@ func (m model) updateCustomInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.mode = modeBrowse
 		m.textInput.Blur()
-		m.status = "Returned to the port list."
+		m.status = ""
 		return m, nil
 	case "enter":
 		value := strings.TrimSpace(m.textInput.Value())
 		portNum, err := strconv.Atoi(value)
 		if err != nil || portNum <= 0 || portNum > 65535 {
-			m.status = "Enter a valid TCP port between 1 and 65535."
+			m.status = "enter a port between 1 and 65535"
 			return m, nil
 		}
 
@@ -800,7 +1025,7 @@ func (m model) updateCustomInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if info == nil {
-			m.status = fmt.Sprintf("Port %d is not currently listening.", portNum)
+			m.status = fmt.Sprintf("port %d is not listening", portNum)
 			return m, nil
 		}
 		if info.Protected {
@@ -813,7 +1038,7 @@ func (m model) updateCustomInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.selected = info
 		m.mode = modeConfirm
 		m.textInput.Blur()
-		m.status = fmt.Sprintf("Confirm kill for custom port %d (PID %d).", info.Port, info.PID)
+		m.status = ""
 		return m, nil
 	}
 
@@ -827,26 +1052,20 @@ func (m model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if strings.ToLower(msg.String()) == "y" {
-		if m.killing || m.selected == nil {
-			m.mode = modeBrowse
-			m.selected = nil
-			return m, nil
-		}
 		m.killing = true
-		m.status = fmt.Sprintf("Killing port %d (PID %d)…", m.selected.Port, m.selected.PID)
 		portNum := m.selected.Port
-		return m, func() tea.Msg {
+		return m, tea.Batch(m.spinner.Tick, func() tea.Msg {
 			info, err := killPortByNumber(portNum)
 			if err != nil {
 				return killResultMsg{err: err, port: portNum}
 			}
-			return killResultMsg{message: fmt.Sprintf("Killed port %d (PID %d).", info.Port, info.PID), port: info.Port}
-		}
+			return killResultMsg{message: fmt.Sprintf("killed port %d (pid %d)", info.Port, info.PID), port: info.Port}
+		})
 	}
 	// Any other key cancels; a stray keypress must never fire a kill.
 	m.mode = modeBrowse
 	m.selected = nil
-	m.status = "Kill cancelled."
+	m.status = "kill cancelled"
 	return m, nil
 }
 
@@ -857,103 +1076,67 @@ func (m model) View() string {
 
 	if m.width > 0 && (m.width < 40 || m.height < 10) {
 		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-			warnStyle.Render("Terminal too small — resize to at least 40x10"))
+			noticeStyle.Render("Terminal too small — resize to at least 40×10"))
 	}
 
-	var b strings.Builder
-	header := titleStyle.Render("GKPort") + helpStyle.Render(" "+version) + helpStyle.Render("  sort: "+m.sortKey)
-	b.WriteString(headerBox.Render(header))
-	b.WriteString("\n")
 	visible := m.visiblePorts()
-	b.WriteString(fmt.Sprintf("Listening TCP ports: %d", len(visible)))
-	if m.filter != "" {
-		b.WriteString(helpStyle.Render(fmt.Sprintf("  (filter %q: %d/%d)", m.filter, len(visible), len(m.ports))))
-	}
-	if protected := countProtected(visible); protected > 0 {
-		b.WriteString(warnStyle.Render(fmt.Sprintf("   ⚠ %d protected and cannot be killed", protected)))
-	}
-	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("⚠ = protected: OS/service-owned — gkport will never kill it"))
-	b.WriteString("\n\n")
-
 	rows := m.visibleRows()
-	start := max(0, m.cursor-rows+1)
-	end := min(len(visible), start+rows)
 
+	// The list region always occupies exactly `rows` lines, so entering filter or
+	// confirm mode never nudges the content under the cursor.
+	list := make([]string, 0, rows)
 	if len(visible) == 0 {
-		if m.filter != "" {
-			b.WriteString(helpStyle.Render(fmt.Sprintf("Nothing matches filter %q. Press Esc to clear it.\n", m.filter)))
-		} else {
-			b.WriteString(helpStyle.Render("Nothing is listening on TCP right now.\n"))
-		}
+		list = append(list, dimStyle.Render("  "+m.emptyText()))
 	} else {
+		start := max(0, m.cursor-rows+1)
+		end := min(len(visible), start+rows)
 		for i := start; i < end; i++ {
-			p := visible[i]
-			cursor := " "
-			if i == m.cursor && (m.mode == modeBrowse || m.mode == modeFilter) {
-				cursor = cursorStyle.Render(">")
+			active := i == m.cursor
+			if m.mode == modeConfirm {
+				active = m.selected != nil && visible[i].Port == m.selected.Port
 			}
-
-			// Pad the warning column explicitly so the PID column stays aligned
-			// whether or not the terminal renders ⚠ as a double-width glyph.
-			marker := "  "
-			portLabel := portStyle.Render(fmt.Sprintf(":%-5d", p.Port))
-			if p.Protected {
-				warn := warnMark.Render("⚠")
-				marker = warn + strings.Repeat(" ", max(0, 2-lipgloss.Width(warn)))
-				portLabel = lockedStyle.Render(fmt.Sprintf(":%-5d", p.Port))
-			}
-
-			line := fmt.Sprintf("%s %s%s PID %-6d %-18s", cursor, marker, portLabel, p.PID, shortName(p))
-			if m.showPath {
-				line += "  " + shortCmdline(p)
-			}
-			if m.showInfo {
-				line += detailsSuffix(p)
-			}
-			if m.width > 0 {
-				line = ansi.Truncate(line, m.width, "…")
-			}
-			b.WriteString(line + "\n")
-		}
-		if start > 0 || end < len(visible) {
-			b.WriteString(helpStyle.Render(fmt.Sprintf("  showing %d-%d of %d\n", start+1, end, len(visible))))
+			list = append(list, m.renderRow(visible[i], active))
 		}
 	}
-
-	b.WriteString("\n")
-
-	switch m.mode {
-	case modeCustomInput:
-		b.WriteString("Custom port: " + m.textInput.View() + "\n")
-		b.WriteString(helpStyle.Render("Enter confirms. Esc goes back.\n"))
-	case modeFilter:
-		b.WriteString("Filter: " + m.textInput.View() + "\n")
-		b.WriteString(helpStyle.Render("Enter applies. Esc clears and goes back.\n"))
-	case modeConfirm:
-		if m.killing {
-			b.WriteString(fmt.Sprintf("Killing port %d (PID %d)…\n", m.selected.Port, m.selected.PID))
-		} else if m.selected != nil {
-			b.WriteString(fmt.Sprintf("Kill port %d (PID %d)? Press y to confirm, n to cancel.\n", m.selected.Port, m.selected.PID))
-		} else {
-			b.WriteString("Nothing selected.\n")
-		}
-	default:
-		b.WriteString(helpStyle.Render("↑/↓: move  enter: kill  /: filter  a: port  p: path  i: info  s: sort  q: quit\n"))
+	for len(list) < rows {
+		list = append(list, "")
 	}
 
-	if m.mode == modeBrowse && m.cursor < len(visible) && visible[m.cursor].Protected {
-		b.WriteString("\n" + warnStyle.Render(protectedNotice(visible[m.cursor])) + "\n")
+	hints := hintLine(m.mode, m.filter != "")
+
+	lines := make([]string, 0, chromeLines+rows)
+	lines = append(lines,
+		m.titleLine(visible),
+		rule(m.width),
+		m.columnHeader(),
+	)
+	lines = append(lines, list...)
+	lines = append(lines, m.protectionLine(), rule(m.width), m.statusLine(), hints)
+
+	return strings.Join(lines, "\n")
+}
+
+func (m model) titleLine(visible []PortInfo) string {
+	left := titleStyle.Render("gkport") + faintStyle.Render(" "+version)
+
+	summary := fmt.Sprintf("%d killable", len(visible)-countProtected(visible))
+	if m.filter != "" {
+		summary = fmt.Sprintf("%d of %d", len(visible), len(m.ports))
 	}
-	if m.status != "" {
-		b.WriteString(m.status + "\n")
+	right := dimStyle.Render(summary)
+	if protected := countProtected(visible); protected > 0 {
+		right += faintStyle.Render("   ") + noticeStyle.Render(fmt.Sprintf("%d protected", protected))
 	}
 
-	return b.String()
+	gap := 1
+	if m.width > 0 {
+		gap = max(1, m.width-lipgloss.Width(left)-lipgloss.Width(right))
+	}
+	return left + strings.Repeat(" ", gap) + right
 }
 
 func runInteractive(ports []PortInfo, sortKey string) error {
-	p := tea.NewProgram(newModel(ports, sortKey), tea.WithAltScreen())
+	p := tea.NewProgram(newModel(ports, sortKey), tea.WithAltScreen(), tea.WithMouseCellMotion())
 	_, err := p.Run()
 	return err
 }
